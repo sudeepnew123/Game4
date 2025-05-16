@@ -1,6 +1,7 @@
 from flask import Flask, request
 import os, random, requests
 from tinydb import TinyDB, Query
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -21,7 +22,7 @@ def update_coins(user_id, coins):
     db.update({"coins": coins}, User.id == user_id)
 
 def send_message(chat_id, text, reply_markup=None):
-    data = {"chat_id": chat_id, "text": text}
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     if reply_markup:
         data["reply_markup"] = reply_markup
     requests.post(f"{BOT_URL}/sendMessage", json=data)
@@ -51,8 +52,6 @@ def help_text():
 3. Reveal tiles to find gems
 4. Cash out after finding at least 2 gems
 5. Hit a bomb and you lose your bet
-
-(Admin commands in Part 2...)
 """
 
 @app.route("/", methods=["POST"])
@@ -75,7 +74,7 @@ def webhook():
             send_message(chat_id, f"{name}, you have {user_data['coins']} coins.")
 
         elif text.startswith("/help"):
-            send_message(chat_id, help_text(), {"parse_mode": "Markdown"})
+            send_message(chat_id, help_text())
 
         elif text.startswith("/mine"):
             parts = text.split()
@@ -110,7 +109,6 @@ def start_game(user_id, amount, mines):
     }
 
 def build_grid(user_id):
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton  # Only if using `python-telegram-bot`, else use JSON
     game = games.get(user_id)
     if not game:
         return
@@ -120,7 +118,7 @@ def build_grid(user_id):
         for col in range(5):
             idx = row * 5 + col
             if idx in game["revealed"]:
-                btn_row.append({"text": "💎", "callback_data": f"noop"})
+                btn_row.append({"text": "💎", "callback_data": "noop"})
             else:
                 btn_row.append({"text": " ", "callback_data": f"reveal_{idx}"})
         buttons.append(btn_row)
@@ -171,8 +169,6 @@ def admin_commands():
     text = msg.get("text", "")
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
-    
-    # Replace with your own Telegram user ID
     ADMIN_ID = 6356015122
 
     if user_id != ADMIN_ID:
@@ -200,8 +196,6 @@ def admin_commands():
                     send_message(chat_id, f"{username}'s balance updated.")
                     break
     return {"ok": True}
-    
-from datetime import datetime, timedelta
 
 def get_now():
     return datetime.now().isoformat()
@@ -245,7 +239,7 @@ def bonus_handler():
         all_users = db.all()
         top = sorted(all_users, key=lambda x: x["coins"], reverse=True)[:10]
         lb = "\n".join([f"{i+1}. {u['name']} - {u['coins']} coins" for i, u in enumerate(top)])
-        send_message(chat_id, "*Leaderboard:*\n" + lb, {"parse_mode": "Markdown"})
+        send_message(chat_id, "*Leaderboard:*\n" + lb)
 
     elif text.startswith("/gift"):
         parts = text.split()
@@ -291,7 +285,7 @@ def emoji_handler():
 
     if text == "/store":
         store = "\n".join([f"{e} - {p} coins" for e, p in EMOJI_STORE.items()])
-        send_message(chat_id, "*Emoji Store:*\n" + store, {"parse_mode": "Markdown"})
+        send_message(chat_id, "*Emoji Store:*\n" + store)
 
     elif text == "/collection":
         if user["emojis"]:
@@ -345,186 +339,18 @@ def buy_emoji():
     emoji = parts[1]
     price = EMOJI_STORE.get(emoji)
     if not price:
-        send_message(chat_id, "Emoji not found in store.")
+        send_message(chat_id, "Emoji not available in store.")
         return {"ok": True}
-
-    if emoji in user["emojis"]:
-        send_message(chat_id, "You already own this emoji.")
-        return {"ok": True}
-
     if user["coins"] < price:
         send_message(chat_id, "Not enough coins.")
+        return {"ok": True}
+    if emoji in user["emojis"]:
+        send_message(chat_id, "You already own this emoji.")
         return {"ok": True}
 
     user["coins"] -= price
     user["emojis"].append(emoji)
     db.update(user, User.id == user_id)
-    send_message(chat_id, f"You bought {emoji} for {price} coins!")
+    send_message(chat_id, f"Bought {emoji} for {price} coins!")
 
     return {"ok": True}
-
-def send_message(chat_id, text, extra=None):
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-    if extra:
-        payload.update(extra)
-    requests.post(f"{BASE}/sendMessage", json=payload)
-
-@app.route("/", methods=["GET", "POST"])
-def webhook_handler():
-    if request.method == "POST":
-        update = request.get_json()
-        msg = update.get("message", {})
-        text = msg.get("text", "")
-
-        if text.startswith("/start"):
-            return start_handler()
-        elif text.startswith("/mine"):
-            return mine_handler()
-        elif text.startswith("/cashout"):
-            return cashout_handler()
-        elif text.startswith("/balance"):
-            return balance_handler()
-        elif text.startswith("/help"):
-            return help_handler()
-        elif text.startswith("/daily") or text.startswith("/weekly") or text.startswith("/leaderboard") or text.startswith("/gift"):
-            return bonus_handler()
-        elif text.startswith("/store") or text.startswith("/collection") or text.startswith("/give"):
-            return emoji_handler()
-        elif text.startswith("/buy"):
-            return buy_emoji()
-        elif text.startswith("/broadcast") or text.startswith("/resetdata") or text.startswith("/setbalance"):
-            return admin_commands()
-    return {"ok": True}
-
-ADMIN_ID = 6356015122  # Only you can use these commands
-
-@app.route("/admin", methods=["POST"])
-def admin_commands():
-    update = request.get_json()
-    msg = update["message"]
-    text = msg.get("text", "")
-    chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
-    name = msg["from"].get("first_name", "Player")
-
-    if user_id != ADMIN_ID:
-        send_message(chat_id, "You are not authorized.")
-        return {"ok": True}
-
-    if text.startswith("/broadcast"):
-        msg_content = text.replace("/broadcast", "", 1).strip()
-        if not msg_content:
-            send_message(chat_id, "Usage: /broadcast <message>")
-            return {"ok": True}
-        count = 0
-        for user in db.all():
-            try:
-                send_message(user["id"], f"[Broadcast]\n{msg_content}")
-                count += 1
-            except:
-                continue
-        send_message(chat_id, f"Message sent to {count} users.")
-
-    elif text.startswith("/resetdata"):
-        db.truncate()
-        send_message(chat_id, "All user data has been reset!")
-
-    elif text.startswith("/setbalance"):
-        parts = text.split()
-        if len(parts) != 3 or not parts[2].isdigit():
-            send_message(chat_id, "Usage: /setbalance @username <amount>")
-            return {"ok": True}
-        username = parts[1].lstrip("@")
-        amount = int(parts[2])
-        for u in db:
-            if u["name"] == username:
-                u["coins"] = amount
-                db.update(u, User.id == u["id"])
-                send_message(chat_id, f"{username}'s balance set to {amount}.")
-                break
-        else:
-            send_message(chat_id, "User not found.")
-
-    return {"ok": True}
-
-@app.route("/collection", methods=["POST"])
-def emoji_collection():
-    update = request.get_json()
-    msg = update["message"]
-    chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
-    name = msg["from"].get("first_name", "Player")
-    user = get_user(user_id, name)
-
-    owned = user.get("emojis", [])
-    if not owned:
-        send_message(chat_id, "You don't own any emojis yet.")
-    else:
-        emojilist = " ".join(owned)
-        send_message(chat_id, f"Your emojis: {emojilist}")
-    return {"ok": True}
-@app.route("/give", methods=["POST"])
-def give_emoji():
-    update = request.get_json()
-    msg = update["message"]
-    chat_id = msg["chat"]["id"]
-    user_id = msg["from"]["id"]
-    name = msg["from"].get("first_name", "Player")
-    user = get_user(user_id, name)
-
-    if "reply_to_message" not in msg:
-        send_message(chat_id, "Reply to a user to gift an emoji.")
-        return {"ok": True}
-
-    parts = msg["text"].split()
-    if len(parts) != 2:
-        send_message(chat_id, "Usage: /give <emoji>")
-        return {"ok": True}
-
-    emoji = parts[1]
-    if emoji not in user.get("emojis", []):
-        send_message(chat_id, "You don't own this emoji.")
-        return {"ok": True}
-
-    target_user = msg["reply_to_message"]["from"]
-    target_id = target_user["id"]
-    target_name = target_user.get("first_name", "Player")
-    receiver = get_user(target_id, target_name)
-
-    if emoji in receiver.get("emojis", []):
-        send_message(chat_id, "User already has this emoji.")
-        return {"ok": True}
-        
-    receiver["emojis"].append(emoji)
-    user["emojis"].remove(emoji)
-    db.update(user, User.id == user_id)
-    db.update(receiver, User.id == target_id)
-
-    send_message(chat_id, f"{name} gifted {emoji} to {target_name}!")
-    return {"ok": True}
-    
-def check_bonus(user, bonus_type):
-    now = datetime.utcnow()
-    key = f"last_{bonus_type}_claim"
-    last = user.get(key)
-    cooldown = timedelta(days=1) if bonus_type == "daily" else timedelta(days=7)
-
-    if last:
-        last_time = datetime.strptime(last, "%Y-%m-%dT%H:%M:%S")
-        if now - last_time < cooldown:
-            remaining = cooldown - (now - last_time)
-            return False, f"Come back in {remaining}"
-    
-    user[key] = now.strftime("%Y-%m-%dT%H:%M:%S")
-    return True, None
-
-if user["emojis"]:
-    reaction = random.choice(user["emojis"])
-    send_message(chat_id, f"{reaction} Lucky move!")
-    
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
