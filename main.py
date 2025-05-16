@@ -347,10 +347,53 @@ def buy_emoji():
     if emoji in user["emojis"]:
         send_message(chat_id, "You already own this emoji.")
         return {"ok": True}
-
+        
     user["coins"] -= price
     user["emojis"].append(emoji)
     db.update(user, User.id == user_id)
     send_message(chat_id, f"Bought {emoji} for {price} coins!")
 
     return {"ok": True}
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    
+    if "message" in data:
+        message = data["message"]
+        chat_id = message["chat"]["id"]
+        text = message.get("text", "")
+        user_id = message["from"]["id"]
+        username = message["from"].get("username", "User")
+
+        # Handle /ledboard
+        if text.startswith("/ledboard"):
+            leaderboard = get_leaderboard()
+            text = "🏆 <b>LED BOARD</b> 🏆\n\n"
+            ranks = ["🥇", "🥈", "🥉"]
+            medals = ["GOLD", "SILVER", "BRONZE"]
+            for i, (uid, user_data) in enumerate(leaderboard[:3]):
+                uname = user_data.get("username", f"User_{uid}")
+                coins = user_data.get("balance", 0)
+                text += f"{ranks[i]} @{uname} - {coins} coins - [{medals[i]}]\n"
+
+            # Add Bakras (lowest 3)
+            if len(leaderboard) > 3:
+                text += "\n"
+                for uid, user_data in leaderboard[-3:]:
+                    uname = user_data.get("username", f"User_{uid}")
+                    coins = user_data.get("balance", 0)
+                    text += f"🐐 @{uname} - {coins} coins - [BAKRA]\n"
+
+            send_message(chat_id, text, parse_mode="HTML")
+            return jsonify(ok=True)
+        
+    return jsonify(ok=True)
+
+def get_leaderboard():
+    # Return sorted list of (user_id, user_data) from user_data dict
+    sorted_users = sorted(user_data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)
+    return sorted_users
+    
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
