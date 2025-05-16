@@ -1,7 +1,6 @@
 from flask import Flask, request
 import os, random, requests
 from tinydb import TinyDB, Query
-from datetime import datetime, timedelta
 
 app = Flask(__name__)
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -22,7 +21,7 @@ def update_coins(user_id, coins):
     db.update({"coins": coins}, User.id == user_id)
 
 def send_message(chat_id, text, reply_markup=None):
-    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    data = {"chat_id": chat_id, "text": text}
     if reply_markup:
         data["reply_markup"] = reply_markup
     requests.post(f"{BOT_URL}/sendMessage", json=data)
@@ -52,6 +51,8 @@ def help_text():
 3. Reveal tiles to find gems
 4. Cash out after finding at least 2 gems
 5. Hit a bomb and you lose your bet
+
+(Admin commands in Part 2...)
 """
 
 @app.route("/", methods=["POST"])
@@ -74,7 +75,7 @@ def webhook():
             send_message(chat_id, f"{name}, you have {user_data['coins']} coins.")
 
         elif text.startswith("/help"):
-            send_message(chat_id, help_text())
+            send_message(chat_id, help_text(), {"parse_mode": "Markdown"})
 
         elif text.startswith("/mine"):
             parts = text.split()
@@ -109,6 +110,7 @@ def start_game(user_id, amount, mines):
     }
 
 def build_grid(user_id):
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton  # Only if using `python-telegram-bot`, else use JSON
     game = games.get(user_id)
     if not game:
         return
@@ -118,7 +120,7 @@ def build_grid(user_id):
         for col in range(5):
             idx = row * 5 + col
             if idx in game["revealed"]:
-                btn_row.append({"text": "💎", "callback_data": "noop"})
+                btn_row.append({"text": "💎", "callback_data": f"noop"})
             else:
                 btn_row.append({"text": " ", "callback_data": f"reveal_{idx}"})
         buttons.append(btn_row)
@@ -169,6 +171,8 @@ def admin_commands():
     text = msg.get("text", "")
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
+    
+    # Replace with your own Telegram user ID
     ADMIN_ID = 6356015122
 
     if user_id != ADMIN_ID:
@@ -196,6 +200,8 @@ def admin_commands():
                     send_message(chat_id, f"{username}'s balance updated.")
                     break
     return {"ok": True}
+
+from datetime import datetime, timedelta
 
 def get_now():
     return datetime.now().isoformat()
@@ -239,7 +245,7 @@ def bonus_handler():
         all_users = db.all()
         top = sorted(all_users, key=lambda x: x["coins"], reverse=True)[:10]
         lb = "\n".join([f"{i+1}. {u['name']} - {u['coins']} coins" for i, u in enumerate(top)])
-        send_message(chat_id, "*Leaderboard:*\n" + lb)
+        send_message(chat_id, "*Leaderboard:*\n" + lb, {"parse_mode": "Markdown"})
 
     elif text.startswith("/gift"):
         parts = text.split()
@@ -285,7 +291,7 @@ def emoji_handler():
 
     if text == "/store":
         store = "\n".join([f"{e} - {p} coins" for e, p in EMOJI_STORE.items()])
-        send_message(chat_id, "*Emoji Store:*\n" + store)
+        send_message(chat_id, "*Emoji Store:*\n" + store, {"parse_mode": "Markdown"})
 
     elif text == "/collection":
         if user["emojis"]:
@@ -339,60 +345,59 @@ def buy_emoji():
     emoji = parts[1]
     price = EMOJI_STORE.get(emoji)
     if not price:
-        send_message(chat_id, "Emoji not available in store.")
+        send_message(chat_id, "Emoji not found in store.")
         return {"ok": True}
-    if user["coins"] < price:
-        send_message(chat_id, "Not enough coins.")
-        return {"ok": True}
+
     if emoji in user["emojis"]:
         send_message(chat_id, "You already own this emoji.")
         return {"ok": True}
-        
+
+    if user["coins"] < price:
+        send_message(chat_id, "Not enough coins.")
+        return {"ok": True}
+
     user["coins"] -= price
     user["emojis"].append(emoji)
     db.update(user, User.id == user_id)
-    send_message(chat_id, f"Bought {emoji} for {price} coins!")
+    send_message(chat_id, f"You bought {emoji} for {price} coins!")
 
     return {"ok": True}
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    data = request.get_json()
     
-    if "message" in data:
-        message = data["message"]
-        chat_id = message["chat"]["id"]
-        text = message.get("text", "")
-        user_id = message["from"]["id"]
-        username = message["from"].get("username", "User")
+def send_message(chat_id, text, extra=None):
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
+    if extra:
+        payload.update(extra)
+    requests.post(f"{BASE}/sendMessage", json=payload)
 
-        # Handle /ledboard
-        if text.startswith("/ledboard"):
-            leaderboard = get_leaderboard()
-            text = "🏆 <b>LED BOARD</b> 🏆\n\n"
-            ranks = ["🥇", "🥈", "🥉"]
-            medals = ["GOLD", "SILVER", "BRONZE"]
-            for i, (uid, user_data) in enumerate(leaderboard[:3]):
-                uname = user_data.get("username", f"User_{uid}")
-                coins = user_data.get("balance", 0)
-                text += f"{ranks[i]} @{uname} - {coins} coins - [{medals[i]}]\n"
+@app.route("/", methods=["GET", "POST"])
+def webhook_handler():
+    if request.method == "POST":
+        update = request.get_json()
+        msg = update.get("message", {})
+        text = msg.get("text", "")
 
-            # Add Bakras (lowest 3)
-            if len(leaderboard) > 3:
-                text += "\n"
-                for uid, user_data in leaderboard[-3:]:
-                    uname = user_data.get("username", f"User_{uid}")
-                    coins = user_data.get("balance", 0)
-                    text += f"🐐 @{uname} - {coins} coins - [BAKRA]\n"
-
-            send_message(chat_id, text, parse_mode="HTML")
-            return jsonify(ok=True)
-        
-    return jsonify(ok=True)
-
-def get_leaderboard():
-    # Return sorted list of (user_id, user_data) from user_data dict
-    sorted_users = sorted(user_data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)
-    return sorted_users
+        if text.startswith("/start"):
+            return start_handler()
+        elif text.startswith("/mine"):
+            return mine_handler()
+        elif text.startswith("/cashout"):
+            return cashout_handler()
+        elif text.startswith("/balance"):
+            return balance_handler()
+        elif text.startswith("/help"):
+            return help_handler()
+        elif text.startswith("/daily") or text.startswith("/weekly") or text.startswith("/leaderboard") or text.startswith("/gift"):
+            return bonus_handler()
+        elif text.startswith("/store") or text.startswith("/collection") or text.startswith("/give"):
+            return emoji_handler()
+        elif text.startswith("/buy"):
+            return buy_emoji()
+        elif text.startswith("/broadcast") or text.startswith("/resetdata") or text.startswith("/setbalance"):
+            return admin_commands()
+    return {"ok": True}
     
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
