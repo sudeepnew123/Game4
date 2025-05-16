@@ -1,10 +1,12 @@
 from flask import Flask, request
 import os, random, requests
 from tinydb import TinyDB, Query
+import requests
 
 app = Flask(__name__)
-TOKEN = os.environ.get("BOT_TOKEN")
-BOT_URL = f"https://api.telegram.org/bot{TOKEN}"
+
+BOT_TOKEN = "7581307074:AAFnYttC-UUdazOQ2TSjufCm2G8JHPoGmLw"
+BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 db = TinyDB("users.json")
 User = Query()
