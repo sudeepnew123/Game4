@@ -8,7 +8,7 @@ BOT_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 db = TinyDB("users.json")
 User = Query()
-games = {}  # user_id: {bombs, opened, bet, mines, status}
+games = {}
 
 def get_user(user_id, name):
     user = db.get(User.id == user_id)
@@ -32,24 +32,37 @@ def edit_message(chat_id, msg_id, text, reply_markup=None):
         data["reply_markup"] = reply_markup
     requests.post(f"{BOT_URL}/editMessageText", json=data)
 
-def build_grid(user_id):
+def build_grid(user_id, reveal_all=False):
     btns = []
     for i in range(5):
         row = []
         for j in range(5):
             idx = i * 5 + j
-            label = "❓" if idx not in games[user_id]['opened'] else (
-                "💣" if idx in games[user_id]['bombs'] else "💎"
-            )
+            if reveal_all:
+                if idx in games[user_id]['bombs']:
+                    label = "💣"
+                elif idx in games[user_id]['opened']:
+                    label = "💎"
+                else:
+                    label = "🔲"
+            else:
+                label = "❓" if idx not in games[user_id]['opened'] else (
+                    "💎" if idx not in games[user_id]['bombs'] else "💣"
+                )
             row.append({'text': label, 'callback_data': f"tap:{idx}"})
         btns.append(row)
-    btns.append([{'text': "💸 Cashout", 'callback_data': 'cashout'}])
+    if not reveal_all and games[user_id]['status'] == 'playing':
+        btns.append([{'text': "💸 Cashout", 'callback_data': 'cashout'}])
     return {'inline_keyboard': btns}
 
 def start_game(user_id, amount, mines):
     cells = list(range(25))
     bombs = set(random.sample(cells, mines))
-    games[user_id] = {'bombs': bombs, 'opened': set(), 'bet': amount, 'mines': mines, 'status': 'playing'}
+    games[user_id] = {
+        'bombs': bombs, 'opened': set(),
+        'bet': amount, 'mines': mines,
+        'status': 'playing'
+    }
 
 @app.route("/", methods=["POST"])
 def webhook():
@@ -64,7 +77,13 @@ def webhook():
         name = user.get("first_name", "Player")
         user_data = get_user(user_id, name)
 
-        if text.startswith("/mine"):
+        if text.startswith("/start"):
+            send_message(chat_id, f"Welcome {name}! You have 100 coins.\nUse /mine <amount> <mines> to start playing!")
+
+        elif text.startswith("/balance"):
+            send_message(chat_id, f"{name}, you have {user_data['coins']} coins.")
+
+        elif text.startswith("/mine"):
             parts = text.split()
             if len(parts) != 3:
                 send_message(chat_id, "Usage: /mine <amount> <mines>")
@@ -82,7 +101,7 @@ def webhook():
                 update_coins(user_id, user_data['coins'] - amount)
                 send_message(chat_id, f"{name}'s game started!\nTap tiles:", reply_markup=build_grid(user_id))
             except:
-                send_message(chat_id, "Invalid command format.")
+                send_message(chat_id, "Invalid format. Use: /mine 50 3")
 
     elif "callback_query" in update:
         query = update["callback_query"]
@@ -106,10 +125,10 @@ def webhook():
             if idx in games[user_id]['bombs']:
                 games[user_id]['opened'].add(idx)
                 games[user_id]['status'] = 'lost'
-                edit_message(chat_id, msg_id, "💥 Boom! You hit a bomb!", reply_markup=build_grid(user_id))
+                edit_message(chat_id, msg_id, "💥 Boom! You hit a bomb!\nGame Over!", reply_markup=build_grid(user_id, reveal_all=True))
             else:
                 games[user_id]['opened'].add(idx)
-                edit_message(chat_id, msg_id, "Nice! Keep going or Cashout!", reply_markup=build_grid(user_id))
+                edit_message(chat_id, msg_id, "Nice! Tap more or cashout:", reply_markup=build_grid(user_id))
 
         elif data == "cashout":
             opened = len(games[user_id]['opened'])
@@ -121,7 +140,7 @@ def webhook():
                 reward = int(bet * multiplier)
             update_coins(user_id, user_data['coins'] + reward)
             games[user_id]['status'] = 'cashed'
-            edit_message(chat_id, msg_id, f"💸 Cashed out!\nGems: {opened}\nEarned: {reward} coins", reply_markup=build_grid(user_id))
+            edit_message(chat_id, msg_id, f"💸 Cashed out!\nGems: {opened}\nEarned: {reward} coins", reply_markup=build_grid(user_id, reveal_all=True))
 
     return {"ok": True}
 
